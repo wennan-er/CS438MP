@@ -4,7 +4,6 @@
  *
  * Created on 
  */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,153 +18,376 @@
 #include <signal.h>
 #include <string.h>
 #include <sys/time.h>
+#include <time.h>
 
-#define HEADER_SIZE 100
-#define PACKET_SIZE 1124 //PACKET_SIZE = FRAME_SIZE + HEADER_SIZE
-#define FRAME_SIZE 1024
-#define TIME_BOUND
-#define SERVER_PORT 8000
 #define min(a, b) a < b ? a : b
 #define max(a, b) a > b ? a : b
-
+#define CACHE_SIZE 5000
 #define MAXDATASIZE 1024
 #define PACKETNUM 12
-#define MAX(a, b) ((a) < (b) ? (b) : (a))
-struct sockaddr_in si_other;
 
+struct Packet
+{
+  int seq;
+  long double time;
+};
+
+unsigned long long int total;
+struct sockaddr_in si_other;
 int s, slen;
 int packet_num = 0;
-int flag = 0;
-
 unsigned long long int num_bytes;
-
-/*
-  Varible for TCP sender
-     1.CW: congestion window size
-     2.numberFrame: file split into how many frames
-     3.SST: threshhold for slow start
-     4.dupACK: use for fast recovery
-     5.ackCount: count how many distinct acks recieved, is ackCount==numberFrame, finish!
-     
-     6.fileFrame: i: pointer point to start of the frame i file in disk.
-     7.T-base: base of congestion window: fileFrame
-     8.T_tail
-     9.ackFrame: 1 for having recieved ACK, 0 for not.
-     10.socket1: send packets to receiver
-
-     11.socket2: receive acks from receiver
-  
-*/
-//int CW;
-//int numberFrame;
-//int SST;
-//int dupACK = 0;
-//int timeout;
-//
-//int fileFrame[numberFrame];
-//int T_base = 0;
-//int T_tail = 0;
-//int ackFrame[numberFrame];
-//int timeout;
-//int ackCount = 0;
-//
-//bool slowStart = True;
-//bool congAvoidance = False;
-//bool fastRecovery = False;
-
+struct Packet cache[CACHE_SIZE];
+int retransmit = 0;
+double CW;
+int SST = 128;
+int dupACK = 0;
+int T_base = 0;
+int T_tail = 0;
+int slowStart = 1;
+int fastRecovery = 0;
 FILE *fp;
+int readsize = MAXDATASIZE - PACKETNUM - 1;
+unsigned long long int real_size;
+
+int end = 0;
+long double TIMEOUT = 1;
+int retransmit_p = -1;
+long double start_time = 0;
 
 void diep(char *s)
 {
   perror(s);
   exit(1);
 }
-
-/*
-  TODO:
-  receiverThread will listen on sockfd new coming ACKs:
-    1.based on original state: change state, CW, SST etc.
-*/
-void *receiverThread()
+double floor(double num)
 {
-  int ack_num = -1;
-  int num;
-  char ack[PACKETNUM];
+  int res = (int)num;
+
+  return (double)(res);
+}
+void *timerThread()
+{
+  printf("Timer starts working!\n");
+  long double current_time_out = TIMEOUT;
+  long double start_time1;
+  long double current_time;
+  struct timespec start_t;
+
+  int base = 0;
+
   while (1)
   {
-    if ((num = recvfrom(s, ack, MAXDATASIZE - 1, 0, (struct sockaddr *)&si_other, (socklen_t *)&slen)) > 0)
+    if (cache[0].time != 0)
     {
-      printf("%s\n", ack);
-      if (strcmp(ack, "end") == 0)
+      start_time1 = cache[0].time;
+      cache[0].seq = 0;
+      cache[0].time = 0;
+      break;
+    }
+  }
+
+  //clock_t time_diff = clock() - start_time;
+
+  while (1)
+  {
+    if (base < T_base)
+    {
+      printf("current_time_out: %Lf\n", current_time_out);
+      int i = base;
+      while (i < T_base && T_base <= total)
       {
-        break;
+        current_time_out += cache[(i + 1) % CACHE_SIZE].time;
+        i++;
       }
-      ack_num = MAX(ack_num, atoi(ack));
-      memset(ack, 0, sizeof(ack));
+      base = T_base;
+    }
+
+    clock_gettime(CLOCK_MONOTONIC, &start_t);
+    current_time = start_t.tv_sec + start_t.tv_nsec / 1000000000.0;
+    //current_time = finish_t.tv_sec + finish_t.tv_nsec / 1000000000.0;
+
+    if ((current_time - start_time1) >= current_time_out)
+    {
+      //printf("Timeout! \n");
+      //printf("T_base: %d \n", T_base);
+      SST = (int)(CW / 2);
+      CW = 1;
+      dupACK = 0;
+      slowStart = 1;
+      fastRecovery = 0;
+      T_tail = T_base;
+      retransmit = 1;
+      clock_gettime(CLOCK_MONOTONIC, &start_t);
+      start_time1 = start_t.tv_sec + start_t.tv_nsec / 1000000000.0;
+      current_time_out = TIMEOUT;
+    }
+    if (end == 1)
+    {
+      printf("timer ends");
+      break;
     }
   }
   return NULL;
 }
+
+void *receiverThread()
+{
+  int ack_num = 0;
+  int num;
+  char ack[PACKETNUM];
+
+  printf("Receiver starts working!\n");
+  while (1)
+  {
+    if ((num = recvfrom(s, ack, PACKETNUM, 0, (struct sockaddr *)&si_other, (socklen_t *)&slen)) > 0)
+    {
+      printf("ACK num: %s\n", ack);
+
+      if (strcmp(ack, "end") == 0)
+      {
+        end = 1;
+        break;
+      }
+      int received_ack = atoi(ack);
+      if (received_ack == total)
+      {
+        end = 1;
+        char end[MAXDATASIZE] = "end";
+        sendto(s, end, strlen(end), 0, (struct sockaddr *)&si_other, ((socklen_t)slen));
+        break;
+      }
+      memset(ack, 0, sizeof(ack));
+      //printf("ack: %d\n", ack_num);
+      //printf("received_ack: %d\n", received_ack);
+      //printf("CW: %f\n", CW);
+      //printf("SST: %d\n", SST);
+      //printf("dupAck: %d\n", dupACK);
+
+      if (slowStart)
+      {
+        //printf("Slow Start begins\n");
+        /* A new ACK come */
+        if (ack_num < received_ack)
+        {
+          double new_CW = CW + (double)received_ack - (double)ack_num;
+          //printf("new_CW: %f\n", new_CW);
+          //printf("ack: %d\n", ack_num);
+          //printf("received_ack: %d\n", received_ack);
+
+          if (new_CW > (double)SST)
+          {
+            CW = (double)CW + ((double)received_ack - (double)ack_num) * (double)(1 / floor(CW));
+            //printf("Conflict Avoid: %f\n", CW);
+          }
+          else
+          {
+
+            CW = new_CW;
+            //printf("Not Conflict Avoid: %f\n", CW);
+          }
+          dupACK = 0;
+          // TODO: send packets based on CW
+          T_base += received_ack - ack_num;
+          T_tail = T_base + (int)floor(CW) - 1;
+
+          ack_num = received_ack;
+        }
+        else if (ack_num == received_ack)
+        {
+          dupACK++;
+        }
+      }
+
+      if (fastRecovery)
+      {
+        if (ack_num == received_ack)
+        {
+          CW += 1;
+          dupACK++;
+          // TODO: send one new packet
+          T_tail += 1;
+        }
+        else if (ack_num < received_ack)
+        {
+          CW = (double)SST;
+          dupACK = 0;
+
+          // TODO: send packets based on CW
+          T_base += received_ack - ack_num;
+          T_tail = T_base + (int)floor(CW) - 1;
+
+          ack_num = received_ack;
+          slowStart = 1;
+          fastRecovery = 0;
+        }
+      }
+      if (dupACK == 3)
+      {
+        fastRecovery = 1;
+        slowStart = 0;
+        SST = (int)(CW / 2);
+        CW = (double)SST + 3;
+        // TODO: send packets based on CW
+        T_tail = T_base + (int)floor(CW) - 1;
+        retransmit = 1;
+        retransmit_p = received_ack + 1;
+      }
+    }
+  }
+  return NULL;
+}
+
+unsigned long long int findSize(FILE *fp)
+{
+  // checking if the file exist or not
+  if (fp == NULL)
+  {
+    printf("File Not Found!\n");
+    return -1;
+  }
+
+  fseek(fp, 0L, SEEK_END);
+
+  // calculating the size of the file
+  unsigned long long int res = (unsigned long long int)ftell(fp);
+
+  return res;
+}
 /*
   TODO:
-  senderThread will send packects in congestion window to reciever.
+  sendFrame will send frame[index] to receiver
 */
-
-void *senderThread()
+void send_file(FILE *fp, int readsize, char buf[], int packet_num)
 {
-  char buf[MAXDATASIZE];
+  struct timespec start;
+  //long double elapsed;
 
-  unsigned long long int filesize = num_bytes;
-  int numbytes, num, readsize;
-
-  while (filesize > 0)
+  int numbytes, num;
+  char header[PACKETNUM];
+  snprintf(header, PACKETNUM, "%d", packet_num);
+  //pad(header,PACKETNUM);
+  int length = strlen(header);
+  while (length < PACKETNUM)
   {
+    strcat(header, " ");
+    length += 1;
+  }
+  num = strlen(header);
+  memcpy(buf, header, PACKETNUM); //change to memcpy
 
-    char header[PACKETNUM];
-    snprintf(header, PACKETNUM, "%d", packet_num);
-    //pad(header,PACKETNUM);
-    int length = strlen(header);
-    while (length < PACKETNUM)
+  if ((numbytes = fread(buf + num, sizeof(char), readsize, fp)) > 0)
+  {
+    buf[num + numbytes] = '\0';
+    //printf("%s\n",buf);
+    //printf("send %d\n",packet_num);
+    //printf("%d\n", numbytes);
+    if ((sendto(s, buf, strlen(buf), 0, (struct sockaddr *)&si_other, (socklen_t)slen)) == -1)
     {
-      strcat(header, " ");
-      length += 1;
+      perror("send");
+      printf("send error");
+      exit(1);
     }
+    //printf("send length: %d\n", strlen(buf));
 
-    num = strlen(header);
-
-    readsize = MAXDATASIZE - num - 1;
-    strcpy(buf, header);
-
-    if (filesize >= (unsigned long long int)readsize)
+    if (packet_num == 1)
     {
-      filesize -= (unsigned long long int)readsize;
-      //printf("if folesize: %d\n",filesize);
+      cache[(packet_num - 1) % CACHE_SIZE].seq = packet_num;
+      clock_gettime(CLOCK_MONOTONIC, &start);
+      start_time = start.tv_sec + start.tv_nsec / 1000000000.0;
+      cache[(packet_num - 1) % CACHE_SIZE].time = start_time;
+
+      printf("cache 1 packet: %d\n", cache[(packet_num - 1) % CACHE_SIZE].seq);
+      printf("cache 1 time: %Lf\n", cache[(packet_num - 1) % CACHE_SIZE].time);
     }
     else
     {
-      readsize = (int)filesize;
-      filesize = 0;
-      //printf("else folesize: %d\n",filesize);
-    }
-    //printf("folesize: %d\n",filesize);
-    if ((numbytes = fread(buf + num, sizeof(char), readsize, fp)) > 0)
-    {
-      buf[num + numbytes] = '\0';
-      //printf("%s\n",buf);
-      //printf("%s\n",buf+packet_num);
-      printf("%d\n", numbytes);
-      if ((sendto(s, buf, strlen(buf), 0, (struct sockaddr *)&si_other, (socklen_t)slen)) == -1)
+      //printf("dump1\n");
+      if (cache[(packet_num - 1) % CACHE_SIZE].seq != packet_num)
       {
-        perror("send");
-        printf("send error");
-        exit(1);
+        //printf("dump1\n");
+        cache[(packet_num - 1) % CACHE_SIZE].seq = packet_num;
+        //printf("dump1\n");
+        clock_gettime(CLOCK_MONOTONIC, &start);
+        long double time = start.tv_sec + start.tv_nsec / 1000000000.0;
+        //printf("dump1\n");
+        cache[(packet_num - 1) % CACHE_SIZE].time = time - start_time;
+        printf("time: %Lf\n", time);
+        printf("time: %Lf\n", start_time);
+        printf("cache packet: %d\n", cache[(packet_num - 1) % CACHE_SIZE].seq);
+        printf("cache time: %Lf\n", cache[(packet_num - 1) % CACHE_SIZE].time);
+        clock_gettime(CLOCK_MONOTONIC, &start);
+        start_time = start.tv_sec + start.tv_nsec / 1000000000.0;
       }
-      memset(buf, 0, sizeof(buf));
-      packet_num++;
+    }
+
+    memset(buf, 0, MAXDATASIZE);
+  }
+}
+
+void *senderThread()
+{
+  int current_tail = -1;
+  int packet_size = MAXDATASIZE - PACKETNUM - 1;
+
+  char buf[MAXDATASIZE];
+
+  while (end == 0)
+  {
+    //printf("T_base: %d\n", T_base);
+    //printf("T_base: %d\n", (int)total);
+    if (retransmit == 1)
+    {
+      //printf("retransmit starts\n");
+      //printf("retransmit_packet: %d\n", retransmit_p);
+      //printf("T_base: %d\n", T_base);
+      int offset = T_base;
+      if (retransmit_p != -1)
+      {
+        offset = retransmit_p - 1;
+        retransmit_p = -1;
+      }
+      if ((unsigned long long int)(offset) >= total)
+      {
+        continue;
+      }
+      fseek(fp, (offset)*packet_size, SEEK_SET);
+      packet_num = offset + 1;
+      //printf("Packet num: %d\n", packet_num);
+      send_file(fp, readsize, buf, packet_num);
+      retransmit = 0;
+    }
+    else
+    {
+
+      if (current_tail < T_tail)
+      {
+        //printf("normal send starts\n");
+        int i = current_tail + 1;
+        while (i <= T_tail)
+        {
+          if ((unsigned long long int)i >= total)
+          {
+            break;
+          }
+
+          fseek(fp, i * packet_size, SEEK_SET);
+          packet_num = i + 1;
+          send_file(fp, readsize, buf, packet_num);
+          //printf("Packet num: %d\n", packet_num);
+          //printf("CW: %f\n", CW);
+          //printf("SST: %d\n", SST);
+          //printf("T_base: %d\n", T_base);
+          current_tail = i;
+          i++;
+        }
+      }
+    }
+    if (end == 1 || T_base >= total)
+    {
+      printf("sender ends");
     }
   }
-
-  flag = 1;
   return NULL;
 }
 /*
@@ -181,6 +403,23 @@ void reliablyTransfer(char *hostname, unsigned short int hostUDPport, char *file
     printf("Could not open file to send.");
     exit(1);
   }
+
+  real_size = findSize(fp);
+  unsigned long long int filesize = min(num_bytes, real_size);
+
+  if (filesize % (unsigned long long int)(readsize) > 0)
+  {
+    total = filesize / (unsigned long long int)(readsize) + 1;
+  }
+  else
+  {
+    total = filesize / (unsigned long long int)(readsize);
+  }
+  printf("real_size: %llu\n", real_size);
+  printf("num_bytes: %llu\n", num_bytes);
+  printf("filesize: %llu\n", filesize);
+  printf("total: %llu\n", total);
+  //return;
   /* Determine how many bytes to transfer */
   slen = sizeof(si_other);
 
@@ -202,17 +441,21 @@ void reliablyTransfer(char *hostname, unsigned short int hostUDPport, char *file
     printf("\n Error : Connect Failed \n");
     exit(0);
   }
+  /* initialize variables*/
+  memset(&cache, 0, sizeof(cache));
 
-  /* Send data and receive acknowledgements on s*/
-  /* start senderThread*/
   pthread_t p_sender;
   pthread_create(&p_sender, NULL, &senderThread, NULL);
-  /* start recieverThread*/
+
   pthread_t p_reciever;
   pthread_create(&p_reciever, NULL, &receiverThread, NULL);
-  /* join 2 threads */
+
+  pthread_t p_timer;
+  pthread_create(&p_timer, NULL, &timerThread, NULL);
+
   pthread_join(p_sender, NULL);
   pthread_join(p_reciever, NULL);
+  pthread_join(p_timer, NULL);
 
   printf("Closing the socket\n");
   fclose(fp);
