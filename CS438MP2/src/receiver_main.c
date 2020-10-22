@@ -91,7 +91,7 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile) {
 
             buf[num] = '\0';
             char packet_num[PACKETNUM];
-            strcpy(packet_num, token);
+            memcpy(packet_num, token, PACKETNUM);
             int p_num = atoi(packet_num);
             printf("%s\n", packet_num);
             //printf("%s\n", buf + strlen(packet_num)+1);
@@ -109,7 +109,7 @@ void reliablyReceive(unsigned short int myUDPport, char* destinationFile) {
                 //fd += MAXDATASIZE-PACKETNUM;
                 printf("dump2\n");
                 current_packet ++;
-                while (cache[current_packet%CACHE_SIZE].seq != 0) {
+                while (cache[current_packet%CACHE_SIZE].seq == current_packet) {
                     printf("dump3\n");
                     fprintf(fd, "%s",  cache[current_packet%CACHE_SIZE].frame + PACKETNUM);
                      
