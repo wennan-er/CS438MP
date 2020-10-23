@@ -159,11 +159,6 @@ void *receiverThread()
         break;
       }
       memset(ack, 0, sizeof(ack));
-      //printf("ack: %d\n", ack_num);
-      //printf("received_ack: %d\n", received_ack);
-      //printf("CW: %f\n", CW);
-      //printf("SST: %d\n", SST);
-      //printf("dupAck: %d\n", dupACK);
 
       if (slowStart)
       {
@@ -172,18 +167,13 @@ void *receiverThread()
         if (ack_num < received_ack)
         {
           double new_CW = CW + 2 * ((double)received_ack - (double)ack_num);
-          //printf("new_CW: %f\n", new_CW);
-          //printf("ack: %d\n", ack_num);
-          //printf("received_ack: %d\n", received_ack);
-
           if (new_CW > (double)SST)
           {
-            CW = (double)CW + ((double)received_ack - (double)ack_num) * (double)(1 / floor(CW));
+            CW = (double)CW + ((double)received_ack - (double)ack_num) * 0.25;
             //printf("Conflict Avoid: %f\n", CW);
           }
           else
           {
-
             CW = new_CW;
             //printf("Not Conflict Avoid: %f\n", CW);
           }
@@ -191,16 +181,11 @@ void *receiverThread()
           // TODO: send packets based on CW
           T_base += received_ack - ack_num;
           T_tail = T_base + (int)floor(CW) - 1;
-          //printf("CW: %f\n", CW);
-          //printf("Not Conflict Avoid: %f\n", T_base);
-          //printf("Not Conflict Avoid: %f\n", CW);
           ack_num = received_ack;
         }
         else if (ack_num == received_ack)
         {
           dupACK++;
-          //retransmit = 1;
-          //retransmit_p = received_ack+1;
         }
       }
 
@@ -399,7 +384,7 @@ void *senderThread()
     }
     if (end == 1 || T_base >= total)
     {
-      printf("sender ends");
+      printf("sender ends\n");
     }
   }
   return NULL;
