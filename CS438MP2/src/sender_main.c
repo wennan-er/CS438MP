@@ -171,7 +171,7 @@ void *receiverThread()
         /* A new ACK come */
         if (ack_num < received_ack)
         {
-          double new_CW = CW + (double)received_ack - (double)ack_num;
+          double new_CW = CW + 2 * ((double)received_ack - (double)ack_num);
           //printf("new_CW: %f\n", new_CW);
           //printf("ack: %d\n", ack_num);
           //printf("received_ack: %d\n", received_ack);
