@@ -1,5 +1,6 @@
 #If you use threads, add -pthread here.
-COMPILERFLAGS = -g -Wall -Wextra -Wno-sign-compare 
+COMPILERFLAGS = -g -Wall -Wextra -Wno-sign-compare -std=c++11
+CC = g++
 
 #Any libraries you might need linked in.
 LINKLIBS = -lpthread
@@ -20,7 +21,7 @@ CLIENTOBJECTS = obj/sender_main.o
 #Since 'all' is first in this file, both `make all` and `make` do the same thing.
 #(`make obj server client talker listener` would also have the same effect).
 #all : obj server client talker listener
-all : obj reliable_sender reliable_receiver
+all : obj reliable_sender obj reliable_receiver
 
 #$@: name of rule's target: server, client, talker, or listener, for the respective rules.
 #$^: the entire dependency string (after expansions); here, $(SERVEROBJECTS)
@@ -53,7 +54,7 @@ clean :
 #The % sign means "match one or more characters". You specify it in the target, and when a file
 #dependency is checked, if its name matches this pattern, this rule is used. You can also use the % 
 #in your list of dependencies, and it will insert whatever characters were matched for the target name.
-obj/%.o: src/%.c
+obj/%.o: src/%.cpp
 	$(CC) $(COMPILERFLAGS) -c -o $@ $<
 obj:
 	mkdir -p obj
